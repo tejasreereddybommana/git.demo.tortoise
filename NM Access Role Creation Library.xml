@@ -1,0 +1,435 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule created="1524225385004" id="8a8ae4eb62e153f70162e2e9a22c0060" language="beanshell" modified="1525202722283" name="NM Access Role Creation Library">
+  <Source>
+
+  import java.util.ArrayList;
+  import java.util.HashMap;
+  import java.util.Iterator;
+  import java.util.List;
+  import java.util.Map;
+  import java.util.Set;
+  import java.util.Calendar;
+  import java.util.Date;
+  import java.text.SimpleDateFormat;
+
+  import sailpoint.tools.GeneralException;
+  import sailpoint.object.EmailTemplate;
+  import sailpoint.object.EmailOptions; 
+  import sailpoint.object.ApprovalItem;
+  import sailpoint.object.ApprovalSet;
+
+  import sailpoint.object.Workflow.Approval;
+  import sailpoint.object.Application;
+  import sailpoint.object.Bundle;
+  import sailpoint.object.Identity;
+  import sailpoint.object.Filter;
+  import sailpoint.object.Filter.LeafFilter;
+  import sailpoint.object.ManagedAttribute;
+  import sailpoint.object.Profile;
+  import sailpoint.object.QueryOptions;
+  import sailpoint.workflow.WorkflowContext;
+  import sailpoint.object.EmailTemplate;
+  import sailpoint.object.EmailOptions; 
+  import sailpoint.tools.Util;
+  import sailpoint.api.ObjectUtil;
+
+  // Creating a Role with setting the required attributes.
+  public void createRole(String roleName,String roleType,String roleOwner,String launcher,String secondaryOwner) 
+  {
+    Identity roleOwnerObj = null;
+    Identity roleSecondaryOwnerObj = null;
+    String emailBody = " Access role  " + roleName +" created successfully.";
+    Identity requesterObj   = context.getObjectByName(Identity.class,launcher);
+    Identity roleSecondaryOwnerObj   = context.getObject(Identity.class,secondaryOwner);
+    roleOwnerObj = context.getObject(Identity.class, roleOwner);
+    Map approvalMap = new HashMap();
+    if(wfcontext.getVariable("approvedList") != null)
+    {
+      Filter valueFilter = Filter.in("value", wfcontext.getVariable("approvedList"));
+      Filter idFilter = Filter.in("id", wfcontext.getVariable("approvedList"));
+      Filter displayNameFilter = Filter.in("displayName", wfcontext.getVariable("approvedList"));
+      QueryOptions options = new QueryOptions();
+      Filter orFilter = Filter.or(valueFilter,idFilter);
+      options.addFilter(Filter.or(orFilter, displayNameFilter));
+      List entObjs = context.getObjects(ManagedAttribute.class, options);
+      if(entObjs != null) 
+      {
+        for (ManagedAttribute ma : entObjs) 
+        {
+          String appName = (ma.getApplication() != null) ? ma.getApplication().getName() : "";
+          List ents = new ArrayList();
+          if (approvalMap.get(appName) != null) 
+          {
+            ents = (List) approvalMap.get(appName);
+          }
+          ents.add(ma);
+          approvalMap.put(appName, ents);
+        }
+      }
+    }
+    List profilesList = new ArrayList();
+    Calendar c = Calendar.getInstance();
+    c.setTime(new Date()); 
+    c.add(Calendar.DATE, 180); 
+    Date time = c.getTime();
+    Calendar c1 = Calendar.getInstance();
+    c1.setTime(new Date()); 
+    c1.add(Calendar.DATE, 0); 
+    Date createdTime = c1.getTime();
+
+    Bundle bundleObject = new Bundle();
+    bundleObject.setName(roleName);
+    bundleObject.setDisplayName(roleName);
+    bundleObject.setType(roleType);
+    bundleObject.setAttribute("RoleEndDate",time);
+    bundleObject.addDescription("en_US", description);
+    bundleObject.setAttribute("createdTime",createdTime);
+
+    if(roleSecondaryOwnerObj != null)
+    {
+      bundleObject.setAttribute("secondaryOwner",roleSecondaryOwnerObj.getName());
+    }
+    if(roleOwnerObj != null)
+    {
+      bundleObject.setOwner(roleOwnerObj);
+      bundleObject.setAttribute("manager",roleOwnerObj.getManager().getName());
+      bundleObject.setAttribute("approvedBy",roleOwnerObj.getManager().getName());
+
+    }
+    if(null != approvalMap &amp;&amp; approvalMap.entrySet() != null) 
+    {
+      Set entrySet = approvalMap.entrySet();
+      Iterator itr = entrySet.iterator();
+      while (itr.hasNext()) 
+      {
+        Map.Entry entry = (Map.Entry) itr.next();
+        Profile profileObject = new Profile();
+        profileObject.setApplication(context.getObject(Application.class,entry.getKey()));
+        Map profilesMap = new HashMap();
+        for (ManagedAttribute entObj : (List) entry.getValue()) 
+        {
+          String attrName = (entObj.getAttribute() != null) ? entObj.getAttribute() : "";
+          List entValue = new ArrayList();
+          if (profilesMap.get(attrName) != null) 
+          {
+            entValue = (List) profilesMap.get(attrName);
+          }
+          entValue.add(entObj.getValue());
+          profilesMap.put(attrName, entValue);
+        }
+        Set entrySet = profilesMap.entrySet();
+        Iterator itr = entrySet.iterator();
+        while (itr.hasNext()) 
+        {
+          Map.Entry entry = (Map.Entry) itr.next();
+          Filter filter = Filter.containsAll(entry.getKey(),(List)entry.getValue() );
+          profileObject.addConstraint(filter);
+          profilesList.add(profileObject);
+        }
+
+      }
+      bundleObject.assignProfiles(profilesList);
+    }
+    context.saveObject(bundleObject); 
+    context.commitTransaction();
+
+    EmailTemplate template = new EmailTemplate();
+    template.setName("NM setup accessrole success notification");
+    template.setDescription("Email Template for Role creation Success");
+    template.setSubject("Regarding role creation successfull");
+    if(roleOwnerObj!=null &amp;&amp; template != null &amp;&amp; requesterObj != null)
+    {
+      Map args = new HashMap();
+      String requesterEmail = (null != requesterObj.getEmail()) ? requesterObj.getEmail() : "spadmin@gmail.com";
+      String roleOwnerEmail = roleOwnerObj.getEmail() != null ? roleOwnerObj.getEmail() : "spadmin@gmail.com";
+      String  sendTo = requesterEmail+","+roleOwnerEmail;
+      template.setBody(emailBody);
+      EmailOptions emailops = new EmailOptions(sendTo,args);
+      context.sendEmailNotification(template, emailops);
+    }
+  }
+
+
+  public Approval getOwnerApprovalObj(String strRoleName, String strBundleOwnerName,String selectAction) {
+    Approval approval =  new Approval();
+
+    approval.setOwner(strBundleOwnerName);
+    ApprovalSet approvalSet = new ApprovalSet();
+    ApprovalItem approvalItem = new ApprovalItem();
+    approvalItem.setApplication("IIQ");
+    if(selectAction.equalsIgnoreCase("Create Role")) {
+      approvalItem.setName("Role Creation");
+      approvalItem.setValue(strRoleName);
+      approvalItem.setOperation("Create");
+    }else if(selectAction.equalsIgnoreCase("Delete Role")) {
+      approvalItem.setName("Role Deletion");
+      approvalItem.setValue(strRoleName);
+      approvalItem.setOperation("Delete");
+    }
+    approvalSet.add(approvalItem);
+    approval.setApprovalSet(approvalSet);
+
+    return approval;
+  }
+
+  // Building Approval for Role Owner's Manager
+  public Approval getManagerApprovalObj(String strRoleName, String bundleOwner, String selectAction) {
+    Identity bundleOwnerObj = context.getObject(Identity.class,bundleOwner);
+    Identity objOwnerManager = bundleOwnerObj.getManager();
+    String strOwner = null != objOwnerManager ? objOwnerManager.getName() : "spadmin" ;
+    Approval approval =  new Approval();
+    approval.setOwner(strOwner);
+    ApprovalSet approvalSet = new ApprovalSet();
+    ApprovalItem approvalItem = new ApprovalItem();
+    approvalItem.setApplication("IIQ");
+    if(selectAction.equalsIgnoreCase("Create Role")) {
+      approvalItem.setName("Role Creation");
+      approvalItem.setValue(strRoleName);
+      approvalItem.setOperation("Create");
+    }else if(selectAction.equalsIgnoreCase("Delete Role")) {
+      approvalItem.setName("Role Deletion");
+      approvalItem.setValue(strRoleName);
+      approvalItem.setOperation("Delete");
+    }
+    approvalSet.add(approvalItem);
+    approval.setApprovalSet(approvalSet);
+    return approval;
+  }
+
+  // getting entitlements from Role
+  public  List getEntitlementsFromAccessRoles(String accessRole)
+  {
+    List entList = new ArrayList();
+    Bundle bundle = context.getObject(Bundle.class, accessRole);
+    if(bundle != null) 
+    {
+      List  profiles = bundle.getProfiles();        
+      for (Profile profile : profiles)
+      {
+        List constraints = profile.getConstraints();           
+        for (LeafFilter filter: constraints) 
+        {              
+          List constrintsList = (List) filter.getValue();       
+          for (Object object : entList) 
+          {  
+            entList.add(object);
+          }      
+        }  
+      }
+    }
+    return entList;
+  }
+  // Updating Role in the case of "Add Entitlements", "Remove Entitlements" and "Modify Role"
+  public void updateRole(String launcher,String selectAction,String SelectRoleOwner,String strRoleName,List entitlementsList) 
+  {
+    Identity requesterObj   = context.getObjectByName(Identity.class, launcher);
+    Identity roleOwnerObj   = null;
+    Bundle bundle = null;
+    Calendar mc = Calendar.getInstance();
+    mc.setTime(new Date()); 
+    mc.add(Calendar.DATE, 0); 
+    Date modifiedTime = mc.getTime();
+
+    if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Modify Role"))
+    {
+      bundle =  context.getObject(Bundle.class, strRoleName);
+
+      roleOwnerObj = context.getObject(Identity.class, SelectRoleOwner);
+      if(bundle != null) 
+      {
+        if(roleOwnerObj != null) {
+          bundle.setOwner(roleOwnerObj);
+          bundle.setAttribute("manager",roleOwnerObj.getManager().getName());
+        }
+        if(descriptionChange != void &amp;&amp; descriptionChange != null) {
+          bundle.addDescription("en_US", descriptionChange);
+        }
+        if(SelectSecondaryRoleOwner != void &amp;&amp; SelectSecondaryRoleOwner !=null)
+        {
+          Identity SecondaryRoleOwner = context.getObject(Identity.class,SelectSecondaryRoleOwner);
+          bundle.setAttribute("secondaryOwner",SecondaryRoleOwner.getName());
+        }
+
+      }
+
+      bundle.setAttribute("lastModified",modifiedTime);
+      context.saveObject(bundle); 
+    }
+    else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Add Entitlements"))
+    {
+      Map approvalMap = new HashMap();
+      Filter valueFilter = Filter.in("value", entitlementsList);
+      Filter idFilter = Filter.in("id", entitlementsList);
+      QueryOptions options = new QueryOptions();
+      options.addFilter(Filter.or(valueFilter, idFilter));
+      List entObjs = context.getObjects(ManagedAttribute.class, options);
+      if(entObjs != null)
+      {
+        for (ManagedAttribute ma : entObjs) 
+        {
+          String appName = (ma.getApplication() != null) ? ma.getApplication().getName() : "";
+          List ents = new ArrayList();
+          if (approvalMap.get(appName) != null) 
+          {
+            ents = (List) approvalMap.get(appName);
+          }
+          ents.add(ma);
+          approvalMap.put(appName, ents);
+        }
+      }
+      if(null != approvalMap &amp;&amp; approvalMap.entrySet() != null) 
+      {
+        List profilesList = new ArrayList();
+        bundle  =  context.getObject(Bundle.class, strRoleName);
+        if(bundle != null &amp;&amp; bundle.getProfiles() != null)
+        {
+          profilesList =  bundle.getProfiles();
+        }
+        if(bundle != null ) 
+        {
+          roleOwnerObj   = bundle.getOwner();
+          Set entrySet = approvalMap.entrySet();
+          Iterator itr = entrySet.iterator();
+          while (itr.hasNext())
+          {
+            Map.Entry entry = (Map.Entry) itr.next();
+            Profile profile = new Profile();
+            profile.setApplication(context.getObject(Application.class,entry.getKey()));
+            Map profilesMap = new HashMap();
+            for (ManagedAttribute entObj : (List) entry.getValue()) 
+            {
+              String attrName = (entObj.getAttribute() != null) ? entObj.getAttribute() : "";
+              List entValue = new ArrayList();
+              if (profilesMap.get(attrName) != null) 
+              {
+                entValue = (List) profilesMap.get(attrName);
+              }
+              entValue.add(entObj.getValue());
+              profilesMap.put(attrName, entValue);
+            }
+            Set entrySet = profilesMap.entrySet();
+            Iterator itr = entrySet.iterator();
+            while (itr.hasNext()) 
+            {
+              Map.Entry entry = (Map.Entry) itr.next();
+              Filter filter = Filter.containsAll(entry.getKey(),(List)entry.getValue() );
+              profile.addConstraint(filter);
+              profilesList.add(profile);
+            }
+          }
+          bundle.assignProfiles(profilesList);
+          bundle.setAttribute("lastModified",modifiedTime);
+          context.saveObject(bundle); 
+        }
+      }
+    }  
+    else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Remove Entitlements"))
+    {
+
+      bundle =  context.getObject(Bundle.class, strRoleName);
+      roleOwnerObj = bundle.getOwner();
+      if (bundle != null &amp;&amp; entitlementsList != null &amp;&amp; !entitlementsList.isEmpty())
+      {
+        List profileList = bundle.getProfiles();
+        List profileToAdd = new ArrayList();
+        List profilesToDelete = new ArrayList();
+        List profileMaAttrList = null;
+        Map entAppMap = new HashMap();
+        Filter maIdFilter = Filter.in("id", entitlementsList);
+        List maObjList = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(maIdFilter));
+        for (ManagedAttribute maObj : maObjList) 
+        {
+          maObj.getApplicationId();
+          Set strMaSet = new HashSet();
+          if (entAppMap.get(maObj.getApplicationId()) != null) {
+            strMaSet = (Set) entAppMap.get(maObj.getApplicationId());
+          }  
+          strMaSet.add(maObj.getValue());
+          entAppMap.put(maObj.getApplicationId(), strMaSet);
+        }
+        for(Profile profileObj : profileList) 
+        {
+          if(profileObj != null &amp;&amp; entAppMap.containsKey(profileObj.getApplication().getId())) 
+          {
+            profileMaAttrList = new ArrayList();
+            List filters1 = profileObj.getConstraints(); 
+            Iterator profilesItrobj = filters1.iterator(); 
+            while(profilesItrobj.hasNext()) 
+            { 
+              LeafFilter filterobj = (LeafFilter) profilesItrobj.next(); 
+              profileMaAttrList = (List) filterobj.getValue();
+              String maAattribute = filterobj.getProperty();
+              if(profileMaAttrList != null  &amp;&amp; !profileMaAttrList.isEmpty())
+              {
+                Set inputMaList = (Set) entAppMap.get(profileObj.getApplication().getId());
+                Filter inputvalueFilter = Filter.in("value", inputMaList);
+                Filter attrFilter = Filter.eq("attribute", maAattribute);
+                Filter appFilter = Filter.eq("application.id", profileObj.getApplication().getId());
+                Filter andFilter = Filter.and(appFilter,attrFilter);
+                Filter inputMafinalFilter = Filter.and(andFilter,inputvalueFilter);
+                List inputManagedAttrObjs = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(inputMafinalFilter));
+                List inputmaIdsList  = ObjectUtil.getObjectIds(inputManagedAttrObjs);
+                Filter displayNameFilter = Filter.in("displayName", profileMaAttrList);
+                Filter valueFilter = Filter.in("value", profileMaAttrList);
+                Filter nameFileter = Filter.or(displayNameFilter,valueFilter);
+                Filter outputMafinalFilter = Filter.and(nameFileter,andFilter);
+                List profileManagedAttrObjs = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(outputMafinalFilter));
+                List profileMaIdsList  = ObjectUtil.getObjectIds(profileManagedAttrObjs);
+                if(inputmaIdsList.size() == profileMaIdsList.size()  &amp;&amp; inputmaIdsList.containsAll(profileMaIdsList))
+                {
+                  profilesToDelete.add(profileObj.getId());
+                }
+                else
+                {
+                  profileMaIdsList.removeAll(inputmaIdsList);
+                  if(profileMaIdsList != null  &amp;&amp; !profileMaIdsList.isEmpty())
+                  {
+                    List finalMaList = new ArrayList();
+                    Filter ifFilter = Filter.in("id", profileMaIdsList);
+                    List finalMaObjects = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(ifFilter));
+                    for(ManagedAttribute ma : finalMaObjects)
+                    {
+                      finalMaList.add(ma.getValue());
+                    }
+                    profilesToDelete.add(profileObj.getId());
+                    Profile profile = new Profile();
+                    Filter filter = Filter.containsAll(filterobj.getProperty(), finalMaList);
+                    profile.setApplication(profileObj.getApplication());
+                    profile.addConstraint(filter);
+                    profileToAdd.add(profile);
+                  }
+                }
+              }
+            }
+          }
+          bundle.assignProfiles(profileToAdd);
+          bundle.setAttribute("lastModified",modifiedTime);
+          context.saveObject(bundle);
+          if(profilesToDelete != null  &amp;&amp; !profilesToDelete.isEmpty()){
+            Filter deleteObjFilter = Filter.in("id", profilesToDelete);
+            ObjectUtil.removeObjects(context, Profile.class, new QueryOptions().addFilter(deleteObjFilter));
+          }
+        } 
+      }
+    }
+
+
+    context.commitTransaction();
+    EmailTemplate template = new EmailTemplate();
+    template.setName("NM setup accessrole success notification");
+    template.setDescription("Email Template for Role Creation Success");
+    template.setSubject("Regarding Role Updation");
+    template.setBody("Role Updated Successfully with action " +selectAction);
+    if( requesterObj != null &amp;&amp; roleOwnerObj!=null &amp;&amp; null != template) 
+    {
+      Map args = new HashMap();
+      String requesterEmail = (null != requesterObj.getEmail()) ? requesterObj.getEmail() : "spadmin@gmail.com";
+      String roleOwnerEmail = roleOwnerObj.getEmail() != null ? roleOwnerObj.getEmail() : "spadmin@gmail.com";
+      String  sendTo = requesterEmail+","+roleOwnerEmail;
+      EmailOptions emailops = new EmailOptions(sendTo,args);
+      context.sendEmailNotification(template, emailops);
+    }
+  }
+  </Source>
+</Rule>

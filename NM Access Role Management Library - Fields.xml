@@ -1,0 +1,246 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule created="1525198977052" id="ff808081631b1fa001631cf1781c005b" language="beanshell" name="NM Access Role Management Library - Fields">
+  <Source>
+  import java.util.ArrayList;
+  import java.util.HashMap;
+  import java.util.Iterator;
+  import java.util.List;
+  import java.util.Map;
+  import java.util.Set;
+  import java.util.Collection;
+  import java.util.HashSet;
+
+  import sailpoint.api.ObjectUtil;
+  import sailpoint.object.Application;
+  import sailpoint.object.Bundle;
+  import sailpoint.object.EmailOptions;
+  import sailpoint.object.EmailTemplate;
+  import sailpoint.object.Filter;
+  import sailpoint.object.Custom;
+  import sailpoint.object.Filter.LeafFilter;
+  import sailpoint.object.Identity;
+  import sailpoint.object.ManagedAttribute;
+  import sailpoint.object.Profile;
+  import sailpoint.object.QueryOptions;
+  import sailpoint.tools.GeneralException;
+  import sailpoint.tools.Util;
+  import sailpoint.workflow.WorkflowContext;
+
+  // Validating if entitlement does not has owner
+  public String  validateEntOwner(List selectedCreateEntitlements)
+  {
+    Filter filter = Filter.in("id", selectedCreateEntitlements);
+    List withoutOwnerEnts = new ArrayList();
+    List maObjList = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(filter));
+    for(ManagedAttribute maObj : maObjList)
+    {
+      if(maObj.getOwner() == null)
+      {
+        withoutOwnerEnts.add(maObj.getValue());
+      }
+    }
+    if(withoutOwnerEnts != null &amp;&amp; !withoutOwnerEnts.isEmpty())
+    {
+      return " " + Util.listToCsv(withoutOwnerEnts) + " Entitlements does not has owner";
+    }
+    return null;
+  }
+
+  // Validating maximum number of roles owned by same owner and owner's manager.			
+  public String validateManagerAndOwner(String identityName)
+  {   
+    Identity objIdentity =  context.getObject(Identity.class,identityName);
+    if(objIdentity != null)
+    {
+      if(objIdentity.getManager() == null)
+      {
+        return "Role owner doesn't have Manager. Please select different Owner";
+      }               
+      int ownerToMaxNumberofRoles = 0;
+      Custom  customObj = getCustomObject(); // getting "NM AccessRole creation CustomObject" custom Object from context
+      if(customObject != null){
+        ownerToMaxNumberofRoles = Integer.parseInt(customObj.getString("ownerToMaxNumberofRoles"));
+      }
+      Filter typeFilter = Filter.eq("type", "Access");
+      Filter ownerFilter = Filter.or(Filter.eq("owner.id", identityName),Filter.eq("owner.name", identityName));
+      int bundleObjCount  = context.countObjects(Bundle.class, new QueryOptions().addFilter(Filter.and(typeFilter, ownerFilter)));
+      if(bundleObjCount >= ownerToMaxNumberofRoles)
+      {
+        return objIdentity.getName()+" is owned "+ownerToMaxNumberofRoles+" Access roles already, So please select different owner";
+      }
+    }
+    return null;
+  }
+
+  // getting "NM AccessRole creation CustomObject" custom Object from context
+  public Custom getCustomObject()
+  {
+    Custom customObject = context.getObject(Custom.class, "NM AccessRole creation CustomObject");
+    if(customObject == null) {
+      throw new Exception("Custom Object is not existed with name : NM AccessRole creation CustomObject");
+    }
+    return customObject;
+  }
+
+  public List getManagedAttributeObjIds(String bundleNameOrId)
+  {
+    ArrayList entIdList = new ArrayList();
+    Bundle bundleObj = context.getObject(Bundle.class,bundleNameOrId);
+    List profiles = bundleObj.getProfiles();
+    for (Profile profileObj : profiles) 
+    {
+      List constraints = profileObj.getConstraints();
+      for (Filter  filter : constraints) 
+      {
+        if(filter.getValue() != null &amp;&amp; !filter.getValue().isEmpty())
+        {
+          Filter idFilter = Filter.eq("application.id", profileObj.application.id);
+          Filter dispName = Filter.in("displayName", filter.getValue());
+          Filter valueFilter = Filter.in("value", filter.getValue()); 
+          Filter orFilter = Filter.or(dispName,valueFilter);  
+          Filter finalFilter = Filter.and(idFilter,orFilter); 
+          List managedAttrObjList = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(finalFilter));
+          if(managedAttrObjList != null)
+          {
+            List idList = ObjectUtil.getObjectIds(managedAttrObjList);
+            entIdList.addAll(idList);
+          }
+        }
+      }
+    }
+    return entIdList;
+  }
+
+  public String getRoleName(String roleNameOrId)
+  {
+    String strRoleName = "";
+    bundleObj = context.getObject(Bundle.class, roleNameOrId);
+    if(bundleObj != null) {
+      strRoleName = bundleObj.getName();
+    }
+    return strRoleName;
+  }
+
+  // getting Entitlement Names from Roles List
+  public String getEntValuesOrDisplayNames(List maObjIdsList) 
+  {
+    String entNames = ""; 
+    Filter filter = Filter.in("id", maObjIdsList);
+    List maNames = new ArrayList();
+    List maObjList = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(filter));
+    for(ManagedAttribute maObj : maObjList)
+    {
+      if(maObj.getDisplayName() != null){
+        maNames.add(maObj.getDisplayName());
+      }
+      else
+      {
+        maNames.add(maObj.getValue());
+      }
+    }
+    if(maNames != null &amp;&amp; !maNames.isEmpty()){
+      entNames = Util.listToCsv(maNames, true);
+    }
+    return entNames;
+  }
+
+  // Validating if Role exist with selected Entitlements
+  public String validateEntitlements(List value,String launcher)
+  {
+    Map inputAppMap = new HashMap();
+    Set existingBundleNames = new HashSet();
+    Filter maIdFilter = Filter.in("id", value);
+    Iterator&lt;ManagedAttribute> maIterator = context.search(ManagedAttribute.class, new QueryOptions().addFilter(maIdFilter));
+    while(maIterator.hasNext()) 
+    {
+      ManagedAttribute maObj = maIterator.next();
+      maObj.getApplicationId();
+      Set strMaSet = new HashSet();;
+      if (inputAppMap.get(maObj.getApplicationId()) != null) 
+      {
+        strMaSet = (Set) inputAppMap.get(maObj.getApplicationId());
+      }
+      strMaSet.add(maObj.getValue());
+      inputAppMap.put(maObj.getApplicationId(), strMaSet);
+    }
+    if (inputAppMap != null &amp;&amp; !inputAppMap.isEmpty()) 
+    {
+      List profileMaAttrList = null;
+      Set inputAppIds = inputAppMap.keySet();
+      Filter bundleProAppFilter = Filter.containsAll("profiles.application.id", inputAppIds);
+      Filter bundleType = Filter.eq("type", "Access");
+      Filter bundleFilter = Filter.and(bundleProAppFilter,bundleType);
+      Map appProfileEnts = null;
+      Iterator bundlesIterator = context.search(Bundle.class, new QueryOptions().addFilter(bundleFilter));
+      while(bundlesIterator.hasNext()) 
+      {
+        Bundle bundleObj = bundlesIterator.next();
+        List profilesList = bundleObj.getProfiles();
+        appProfileEntsMap = new HashMap();
+        int count = 0;
+        for(Profile profileObj : profilesList ) 
+        {
+          if(profileObj != null &amp;&amp; inputAppMap.containsKey(profileObj.getApplication().getId()))
+          {
+            profileMaAttrList = new ArrayList();
+            List filters = profileObj.getConstraints(); 
+            Iterator itr1 = filters.iterator(); 
+            while(itr1.hasNext()) { 
+              LeafFilter filterobj = (LeafFilter) itr1.next();	
+              profileMaAttrList = (List) filterobj.getValue(); 
+              Set oldSet = new HashSet();
+              if (appProfileEntsMap.get(profileObj.getApplication().getId()) != null) 
+              {
+                oldSet = (Set) appProfileEntsMap.get(profileObj.getApplication().getId());
+              } 
+              oldSet.addAll(profileMaAttrList);
+              appProfileEntsMap.put(profileObj.getApplication().getId(), oldSet);
+            }
+          }
+        }
+        Set profileMapKeys = appProfileEntsMap.keySet();
+        boolean flag = true;
+        if(profileMapKeys.size() == inputAppIds.size() &amp;&amp; profileMapKeys.containsAll(inputAppIds))
+        {
+          for(String key : profileMapKeys) 
+          {
+            Set inputMapEnts = inputAppMap.get(key);
+            Set profileMapEnts = appProfileEntsMap.get(key);
+
+            if (inputMapEnts.size() != profileMapEnts.size() || !inputMapEnts.containsAll(profileMapEnts)) 
+            {
+              flag = false;
+              break;
+            }
+          }
+        }
+        if(flag){
+          existingBundleNames.add(bundleObj.getName());
+        }
+      }
+      if(existingBundleNames != null &amp;&amp; existingBundleNames.size() > 0)
+      {
+        EmailTemplate template = new EmailTemplate();
+        template.setName("Requestor Notification");
+        template.setDescription("Email Template to warn the  requestor regarding the duplication of roles");
+        template.setSubject("Regarding Role duplcation with selected entitlements.");
+        template.setBody("A Role is already existed with the selected Entitlements. So plese select some other set of Entitlements.");
+        Identity identity   = context.getObjectByName(Identity.class,launcher);
+        if( identity != null &amp;&amp; null != template)
+        {
+          Map args = new HashMap();		
+          String identityEmail = (null != identity.getEmail()) ? identity.getEmail() : "spadmin@gmail.com";
+          String  sendTo = identityEmail;
+          EmailOptions emailops = new EmailOptions(sendTo,args);
+          context.sendEmailNotification(template, emailops);
+
+
+        }
+        return "Role(s) are exist with Selected Entitlements : "+existingBundleNames; 
+      }
+    }
+    return null;
+  }
+  </Source>
+</Rule>

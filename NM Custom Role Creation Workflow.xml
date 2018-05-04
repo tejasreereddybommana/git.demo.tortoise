@@ -1,0 +1,1682 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Workflow PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Workflow created="" explicitTransitions="true" id="" modified="" name="NM Custom Role Creation Workflow">
+  <Variable initializer="true" name="trace"/>
+  <Variable name="launcher"/>
+  <Variable initializer="true" name="transient"/>
+  <Variable name="identityRequestId" output="true">
+    <Description>The sequence id of the Identity request object which is stored in
+      the name field of the identity request and auto-incremented.</Description>
+  </Variable>
+  <Variable initializer="Normal" input="true" name="workItemPriority">
+    <Description>The String version of a WorkItem.Priority. This variable is
+      used to set the priority on all of the workitems generated
+      as part of this workflow and also set on the IdentityRequest
+      object.</Description>
+  </Variable>
+  <Variable input="true" name="ticketManagementApplication">
+    <Description>Name of the application that can handle ticket requests.
+      When non-null the Manage Ticket Steps will be visited to open
+      tickets during the workflow lifecycle.</Description>
+  </Variable>
+  <Variable input="true" name="identityName">
+    <Description>The name of the identity being updated.</Description>
+  </Variable>
+  <Variable input="true" name="batchRequestItemId">
+    <Description>Used by the batch interface to record back individual request item status. The specific item id for the individual request in the batch file.</Description>
+  </Variable>
+  <Variable initializer="script:(identityDisplayName != void) ? identityDisplayName : resolveDisplayName(identityName)" input="true" name="identityDisplayName">
+    <Description>
+      The displayName of the identity being updated.
+      Query for this using a projection query and fall back to the name.
+    </Description>
+  </Variable>
+  <Variable input="true" name="plan">
+    <Description>The provisioning plan ready to execute.</Description>
+  </Variable>
+  <Variable input="true" name="flow">
+    <Description>
+      The name of the LCM flow that launched this workflow.
+      This is one of these three values:
+      AccountsRequest
+      EntitlementsRequest
+      RolesRequest
+    </Description>
+  </Variable>
+  <Variable name="selectedRole"/>
+  <Variable initializer="false" name="isRejected"/>
+  <Variable editable="true" initializer="false" name="optimisticProvisioning">
+    <Description>
+      Set to true to enable optimistic provisioning.  This will cause
+      changes to the entitlements compiled from role assignments to be
+      applied immediately to the identity cube rather than waiting
+      for the next refresh/reaggregation after the provisioning system
+      completes the request.
+    </Description>
+  </Variable>
+  <Variable editable="true" initializer="true" name="foregroundProvisioning">
+    <Description>
+      Normally provisioning is done in a step that uses the "background"
+      option to force the workflow to be suspend and be resumed in a
+      background task thread.  This prevents the browser session from
+      hanging since provision can sometimes take a long time.  For demos
+      and testing it can be better to do this in the foreground so that
+      provisioning will have been performed when control is returned to the
+      user.  This prevents having to run the Perform Maintenance task to
+      see the results of the request.
+    </Description>
+  </Variable>
+  <Variable name="approvedList"/>
+  <Variable input="true" name="batchRequestItemId">
+    <Description>
+      Used by the batch interface to record back individual request item status. The specific item id for the individual request in the batch file.
+    </Description>
+  </Variable>
+  <Variable editable="true" name="doRefresh">
+    <Description>
+      Set to true to cause an identity refresh after the changes in the plan
+      have been provisioned.  This is normally off, you might want this on
+      if you want modification of identity or link attributes to result in
+      an immediate re-evaluation of assigned and detected roles.
+    </Description>
+  </Variable>
+  <Variable initializer="Normal" input="true" name="workItemPriority">
+    <Description>
+      The String version of a WorkItem.Priority. This variable is
+      used to set the priority on all of the workitems generated
+      as part of this workflow and also set on the IdentityRequest
+      object.
+    </Description>
+  </Variable>
+  <Variable initializer="false" input="true" name="enableRetryRequest">
+    <Description>
+      When set to true it will disable the workflow retry loop and let the
+      Provision step launch requests to handle the retries.  Enabling
+      this flag will enable some older functionality.
+    </Description>
+  </Variable>
+  <Variable initializer="LCM" input="true" name="source">
+    <Description>
+      String version of sailpoint.object.Source to indicate
+      where the request originated.  Defaults to LCM.
+    </Description>
+  </Variable>
+  <Variable initializer="true" name="trace">
+    <Description>
+      Used for debugging this workflow and when set to true trace
+      will be sent to stdout.
+    </Description>
+  </Variable>
+  <Variable name="approvalSet">
+    <Description>
+      This attributes is set during the "Build Approval Set" step,
+      which builds this list by going through the ProvisioningPlan
+      to build the line items that need to be approved,
+      This variable includes all ApprovalItems that are part of
+      the request process and is updated during the AfterScript
+      of the approval process by assimilating the decisions
+      and comments from the Approvals copy of the ApprovalItem.
+    </Description>
+  </Variable>
+  <Variable name="project">
+    <Description>
+      ProvisioningProject which is just a compiled version of the ProvisioningPlan.
+    </Description>
+  </Variable>
+  <Variable name="identityRequestId" output="true">
+    <Description>
+      The sequence id of the Identity request object which is stored in
+      the name field of the identity request and auto-incremented.
+    </Description>
+  </Variable>
+  <Variable name="workItemComments">
+    <Description>
+      Global comments accumulated during the workflow which should be shared
+      with other approvals. When a new approval is created, the comments in this
+      list will be added to the work item.
+    </Description>
+  </Variable>
+  <Variable initializer="Access" name="roleType" required="true"/>
+  <RuleLibraries>
+    <Reference class="sailpoint.object.Rule" id="8a8ae4eb62e153f70162e2e9a22c0060" name="NM Access Role Creation Library"/>
+  </RuleLibraries>
+  <Step icon="Start" name="Start" posX="24" posY="21">
+    <Transition to="Action Selection"/>
+  </Step>
+  <Step icon="Default" name="Action Selection" posX="94" posY="381">
+    <Approval name="Action Selection Page" owner="ref:launcher" return="selectAction" send="selectAction,wfcontext">
+      <Form name="Action Selection Page">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Action Selection Page"/>
+            <entry key="title" value="Manage access role"/>
+          </Map>
+        </Attributes>
+        <Description>Select the Action as required</Description>
+        <Section name="Select the Action">
+          <Field displayName="Select option" displayType="radio" name="selectAction" required="true" type="string">
+            <AllowedValuesDefinition>
+              <Value>
+                <List>
+                  <String>Create Role</String>
+                  <String>Delete Role</String>
+                  <String>Add Entitlements</String>
+                  <String>Remove Entitlements</String>
+                  <String>Modify Role</String>
+                </List>
+              </Value>
+            </AllowedValuesDefinition>
+            <ValidationScript>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+			  
+                import java.util.List;
+
+                import sailpoint.object.Bundle;
+                import sailpoint.object.Custom;
+                import sailpoint.object.Filter;
+                import sailpoint.object.QueryOptions;
+                
+                 int maxNoOfAccessRoles = 0;
+
+                Custom  customObj = getCustomObject();  // getting "NM AccessRole creation CustomObject" custom Object from context
+                if(customObject != null){
+                maxNoOfAccessRoles = Integer.parseInt(customObj.getString("maxNoOfAccessRoles"));
+                }
+                Filter typeFilter = Filter.eq("type", "Access");
+                List bundleObjsList  = context.getObjects(Bundle.class, new QueryOptions().addFilter(typeFilter));
+
+              if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")&amp;&amp; bundleObjsList != null &amp;&amp; !bundleObjsList.isEmpty() &amp;&amp; bundleObjsList.size() >= maxNoOfAccessRoles)
+                {
+                return "Maximum limit("+maxNoOfAccessRoles+") for creation of Accesss is reached";
+                }
+              </Source>
+            </ValidationScript>
+          </Field>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Role Details Form">
+      <Script>
+        <Source>
+          if(selectAction.equalsIgnoreCase("Create Role"))
+          {
+          return true;
+          }
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Role Deletion Form">
+      <Script>
+        <Source>
+          if(selectAction.equalsIgnoreCase("Delete Role"))
+          {
+          return true;
+          }
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Adding Entitlements">
+      <Script>
+        <Source>
+          if(selectAction.equalsIgnoreCase("Add Entitlements"))
+          {
+          return true;
+          }
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Remove Entitlements Form">
+      <Script>
+        <Source>
+          if(selectAction.equalsIgnoreCase("Remove Entitlements"))
+          {
+          return true;
+          }
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Role Modify">
+      <Script>
+        <Source>
+          if(selectAction.equalsIgnoreCase("Modify Role"))
+          {
+          return true;
+          }
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Default" name="Role Details Form" posX="269" posY="235">
+    <Approval name="Setup new access role" owner="ref:launcher" return="selectAction,selectedEntitlements,roleName,roleOwner,description,selectedRole,secondaryOwner" send="selectAction,launcher,roleOwner,secondaryOwner">
+      <Form name="Setup new access role">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Setup new access role"/>
+          </Map>
+        </Attributes>
+        <Section label="Role Details" name="Role Details">
+          <Field displayName="Role name" name="roleName" required="true" type="string">
+            <ValidationScript>
+              <Source>
+			  			  
+                import sailpoint.object.Bundle;
+
+                String errorMessage = "";
+                if(value != null &amp;&amp; value != void)
+                {
+                Bundle objBundle =  context.getObject(Bundle.class,value);
+                if(objBundle != null) {
+                return "A Role with same name already exists. Please enter a different Role Name";
+                }
+                }
+                return null;
+              </Source>
+            </ValidationScript>
+          </Field>
+          <Field displayName="Role description" name="description" required="true" type="string"/>
+          <Field displayName="Role owner" name="roleOwner" postBack="true" required="true" type="sailpoint.object.Identity">
+            <ValidationScript>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+                
+                return validateManagerAndOwner(value); // Validating maximum number of roles owned by same owner and owner's manager.
+              </Source>
+            </ValidationScript>
+          </Field>
+          <Field displayName="Secondary Role owner" name="secondaryOwner" required="true" type="sailpoint.object.Identity">
+            <Attributes>
+              <Map>
+                <entry key="filterString">
+                  <value>
+                    <Script>
+                      <Source>   
+						import sailpoint.object.Identity;
+						import sailpoint.object.Filter;
+
+						Filter mangerFilter = null;
+						Identity identityObj = context.getObject(Identity.class,roleOwner);
+						if(identityObj != null &amp;&amp;identityObj.getManager() != null ){
+							mangerFilter = Filter.eq("manager.id",identityObj.getManager().getId()); 
+						}
+						else {
+							mangerFilter = Filter.eq("manager.id", ""); 
+						}         
+						String filterString =  mangerFilter.toString();
+						field.setFilterString(filterString);          
+                   </Source>
+                    </Script>
+                  </value>
+                </entry>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+          </Field>
+          <Button action="next" label="Submit"/>
+          <Button action="cancel" label="Cancel"/>
+        </Section>
+      </Form>
+    </Approval>
+    <Transition to="Entitlement Details for create Form "/>
+  </Step>
+  <Step icon="Default" name="Entitlement Details for create Form " posX="269" posY="235">
+    <Approval name="Add access for create role" owner="ref:launcher" return="createseletAppstoAddEntitlements,selectAction,selectedEntitlements,roleName,roleOwner,description,selectedRole,selectedCreateEntitlements,secondaryOwner" send="createseletAppstoAddEntitlements,selectAction,launcher,selectedCreateEntitlements,roleOwner,selectedCreateEntitlements,roleName,description,secondaryOwner">
+      <Form name="Add access for create role">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Add access for create role"/>
+          </Map>
+        </Attributes>
+        <Section label="Entitlement Details" name="Entitlement Details">
+          <Field displayName="Select Entitlement(s) Application" multi="true" name="createseletAppstoAddEntitlements" postBack="true" required="true" type="sailpoint.object.Application">
+            <Attributes>
+              <Map>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+          </Field>
+          <Field displayName="Select Entitlement(s) to Add" dynamic="true" multi="true" name="selectedCreateEntitlements" required="true" type="sailpoint.object.ManagedAttribute">
+            <Attributes>
+              <Map>
+                <entry key="filterString">
+                  <value>
+                    <Script>
+                      <Source>   
+                        import java.util.ArrayList;
+                        import java.util.Iterator;
+                        import java.util.List;                      
+                        import sailpoint.object.Application;
+                        import sailpoint.object.Filter;
+                        
+                        Filter filter = null;
+                        if(createseletAppstoAddEntitlements != null &amp;&amp; !createseletAppstoAddEntitlements.isEmpty()) {
+							filter = Filter.in("application.id", createseletAppstoAddEntitlements);
+                        }                                             
+                        else {
+							filter = Filter.eq("application.id", ""); 
+                        }                      
+                        String filterString = filter.toString(); 
+                        field.setFilterString(filterString);  
+                      </Source>
+                    </Script>
+                  </value>
+                </entry>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+            <ValidationScript>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+					import sailpoint.object.Custom;
+					
+					String errorMessage = "";
+					int minimumEntitlements = 0;
+					Custom  customObj = getCustomObject(); // getting "NM AccessRole creation CustomObject" custom Object from context
+					if(customObject != null) {
+						minimumEntitlements = Integer.parseInt(customObj.getString("minimumEntitlements"));
+					}
+					if(value.size() &lt; minimumEntitlements)
+					{
+						return "Please Select minimum ("+minimumEntitlements+") Entitlements" ;
+					}
+					errorMessage = validateEntOwner(value);  // Validating if entitlement does not has owner
+					if(errorMessage == null) {
+						errorMessage =  validateEntitlements(value,launcher);  // Validating if Role exist with selected Entitlements
+					}
+					return errorMessage;
+             </Source>
+            </ValidationScript>
+          </Field>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Preview Form"/>
+  </Step>
+  <Step icon="Default" name="Preview Form" posX="540" posY="376">
+    <Approval name="Preview Form" owner="ref:launcher" return="" send="selectAction,launcher,roleName,roleOwner,description,selectedRole,selectedCreateEntitlements,selectRoletoAddEntitlements,selectedEntitlements,selectedCreateEntitlements,descriptionChange,SelectRoleOwner,SelectedRoleToModify,SelectSecondaryRoleOwner,CurrentOwner,selectRoletoRemoveEntitlements,selectedRemoveEntitlements,secondaryOwner">
+      <Form name="Preview Form">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Preview Form"/>
+          </Map>
+        </Attributes>
+        <Section label="Selected Details" name="Selected Details" type="text">
+          <Field displayName="">
+            <Script>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+					import sailpoint.api.ObjectUtil;
+					import sailpoint.api.SailPointContext;
+					import sailpoint.object.Bundle;
+					import sailpoint.object.Filter;
+					import sailpoint.object.Identity;
+					import sailpoint.object.ManagedAttribute;
+					import sailpoint.object.QueryOptions;
+					import sailpoint.tools.Util;
+					import java.util.List;
+					import java.util.ArrayList;
+
+					Identity roleOwnerObj = null;
+					String strEntValuesOrDisplayNames = "";
+					String strRoleOwnerName = "";
+					String bundleName = "";
+					Identity secondaryroleOwnerObj = null;
+
+					if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")) {
+						roleOwnerObj = context.getObject(Identity.class, roleOwner);
+						secondaryroleOwnerObj = context.getObject(Identity.class, secondaryOwner);
+						if(roleOwnerObj != null &amp;&amp;secondaryroleOwnerObj != null) {
+							strRoleOwnerName = roleOwnerObj.getName();
+							strSecondaryRoleOwnerName = secondaryroleOwnerObj.getName();
+						}
+						strEntValuesOrDisplayNames = getEntValuesOrDisplayNames(selectedCreateEntitlements); // getting Entitlement Names from Roles List
+						return  "&lt;br>" +"&lt;b>RoleName: &lt;/b>" + roleName + "&lt;br>" + "&lt;b>Role Owner: &lt;/b>" + strRoleOwnerName + "&lt;br>" + "&lt;b>Secondary Owner: &lt;/b>" + strSecondaryRoleOwnerName + "&lt;br>" + "&lt;b>Description: &lt;/b>" + description + "&lt;br>" + "&lt;b>Entitlements: &lt;/b>" + strEntValuesOrDisplayNames + "&lt;br>";
+					}
+					else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Delete Role")) {
+						bundleName = getRoleName(selectedRole);
+						return  "&lt;br>" +"&lt;b>RoleName: &lt;/b>" + bundleName + "&lt;br>"; 
+					}
+					else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Add Entitlements")) { 
+						bundleName = getRoleName(selectRoletoAddEntitlements);
+						strEntValuesOrDisplayNames = getEntValuesOrDisplayNames(selectedEntitlements); // getting Entitlement Names from Roles List
+						return  "&lt;br>" +"&lt;b>RoleName: &lt;/b>" + bundleName + "&lt;br>" + "&lt;b>Entitlements: &lt;/b>" + strEntValuesOrDisplayNames + "&lt;br>" ;
+					}
+					else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Modify Role")) {
+						bundleName = getRoleName(SelectedRoleToModify);
+						Identity secOwner = context.getObject(Identity.class,SelectSecondaryRoleOwner);
+						String secOwnerName = "";
+						if(secOwner != null)
+						{
+							secOwnerName = secOwner.getName();
+						}
+						roleOwnerObj = context.getObject(Identity.class, SelectRoleOwner);
+						if(roleOwnerObj != null) {
+							strRoleOwnerName = roleOwnerObj.getName();
+						}
+						if(descriptionChange == null) {
+							descriptionChange = "";
+						}
+						return  "&lt;br>" +"&lt;b>RoleName: &lt;/b>" + bundleName + "&lt;br>" + "&lt;b>Role Owner: &lt;/b>" + strRoleOwnerName + "&lt;br>" + "&lt;b>Secondary Role Owner: &lt;/b>" + secOwnerName +  "&lt;br>" + "&lt;b>Description: &lt;/b>" + descriptionChange + "&lt;br>";
+					}
+					else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Remove Entitlements")){
+						bundleName = getRoleName(selectRoletoRemoveEntitlements);
+						strEntValuesOrDisplayNames = getEntValuesOrDisplayNames(selectedRemoveEntitlements); // getting Entitlement Names from Roles List
+						return  "&lt;br>" +"&lt;b>RoleName: &lt;/b>" + bundleName + "&lt;br>" + "&lt;b>Entitlements: &lt;/b>" + strEntValuesOrDisplayNames + "&lt;br>" ;
+					}       
+              </Source>
+            </Script>
+          </Field>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Create Role Plan">
+      <Script>
+        <Source>
+          if(selectAction != null &amp;&amp;(selectAction.equalsIgnoreCase("Create Role") || selectAction.equalsIgnoreCase("Delete Role"))){
+			return true;
+          }
+          return false;
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Update Role">
+      <Script>
+        <Source>
+          if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Modify Role")){
+			return true;
+          }
+          return false;
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Entitlement Owner&apos;s Approval">
+      <Script>
+        <Source>
+          if(selectAction != null &amp;&amp; (selectAction.equalsIgnoreCase("Add Entitlements") || selectAction.equalsIgnoreCase("Remove Entitlements"))){
+			return true;
+          }
+          return false;
+        </Source>
+      </Script>
+    </Transition>
+  </Step>
+  <Step icon="Default" name="Role Deletion Form" posX="35" posY="249">
+    <Approval name="Role Deletion Form" owner="ref:launcher" return="selectedRole" send="selectAction">
+      <Form name="Role Deletion Form">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Role Deletion Form"/>
+            <entry key="title" value="Action Selection Page"/>
+          </Map>
+        </Attributes>
+        <Description>Select the Action as required</Description>
+        <Section label="Role Name To Delete" name="Select Role to delete">
+          <Field displayName="Select Role to delete" name="selectedRole" required="true" type="string">
+            <AllowedValuesDefinition>
+              <Script>
+                <Source>
+                  import java.util.ArrayList;
+                  import java.util.List;
+
+                  import sailpoint.object.Filter;
+                  import sailpoint.object.Identity;
+                  import sailpoint.object.Bundle;
+                  import sailpoint.object.QueryOptions;
+                  import sailpoint.tools.GeneralException;
+                  import sailpoint.api.ObjectUtil;
+
+                  Filter eqFilter = Filter.eq("type", "Access");
+                  QueryOptions queryOptions = new QueryOptions();
+                  queryOptions.addFilter(eqFilter);
+                  List bundleList = context.getObjects(Bundle.class, queryOptions);
+                  List accessRolesList  = ObjectUtil.getObjectNames(bundleList);
+                  List finalAccessRolesList = new ArrayList();
+                  for (String strRoleName : accessRolesList) {
+					  Filter assignedRoleFilter = Filter.eq("assignedRoles.name",strRoleName);
+					  Filter detectedRoleFilter = Filter.eq("bundles.name",strRoleName);
+					  QueryOptions queryOptions = new QueryOptions();
+					  queryOptions.addFilter(Filter.or(assignedRoleFilter,detectedRoleFilter));
+					  List identityList = context.getObjects(Identity.class, queryOptions);
+					  if(identityList == null || identityList.isEmpty()) {
+						finalAccessRolesList.add(strRoleName);
+					  }
+                  }
+                  return finalAccessRolesList;
+                </Source>
+              </Script>
+            </AllowedValuesDefinition>
+          </Field>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Preview Form"/>
+  </Step>
+  <Step icon="Default" name="Remove Entitlements Form" posX="249" posY="424">
+    <Approval name="Remove Entitlements" owner="ref:launcher" return="selectedEntitlements,selectAction,selectRoletoRemoveEntitlements,launcher,selectedRemoveEntitlements" send="selectedEntitlements,selectRoletoRemoveEntitlements,selectAction,launcher,selectedRemoveEntitlements">
+      <Form name="Remove Entitlements">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Remove Entitlements"/>
+            <entry key="title" value="Remove Entitlements"/>
+          </Map>
+        </Attributes>
+        <Description>Removing Entitlements to existing Access Roles</Description>
+        <Section label=" Role Name" name="Remove Entitlements">
+          <Field displayName="Select Role to Remove Entitlements" displayType="combobox" name="selectRoletoRemoveEntitlements" postBack="true" required="true" type="string">
+            <AllowedValuesDefinition>
+              <Script>
+                <Source>
+					import java.util.List;
+					import java.util.ArrayList;
+					import java.util.Set;
+					import java.util.HashSet;
+
+					import sailpoint.object.Bundle;
+					import sailpoint.api.ObjectUtil;
+					import sailpoint.object.Filter;
+					import sailpoint.object.Profile;
+					import sailpoint.object.QueryOptions;
+					
+					List roleNames =  new ArrayList();
+					HashSet roleSet = null;
+					int entCount = 0;
+					
+					Filter bundleFilter =  Filter.eq("type", "Access"); 
+					Filter profilesFilter =  Filter.notnull("profiles.id");
+					Filter finalFilter = Filter.and(bundleFilter,profilesFilter);
+					QueryOptions options = new QueryOptions();
+					options.addFilter(finalFilter);
+					
+					List accessRoles = context.getObjects(Bundle.class, options);
+					if(accessRoles != null &amp;&amp; !accessRoles.isEmpty()) {
+						for(Bundle bundleObject : accessRoles) {
+							entCount = 0;
+							List profiles = bundleObject.getProfiles();
+							for (Profile profile : profiles) {
+								List constraints = profile.getConstraints();
+								for (Filter  filter : constraints) {
+									if(filter.getValue() != null &amp;&amp; !filter.getValue().isEmpty()) {
+										entCount = entCount+filter.getValue().size();
+										if(entCount > 3){
+											break;
+										}
+									}
+									if(entCount > 3){
+										break;
+									}
+								}
+							}
+							if(entCount > 3){
+								roleNames.add(bundleObject.getName()); 
+							}
+						}
+						if(roleNames != null &amp;&amp; !roleNames.isEmpty()) {
+							roleSet = new HashSet(roleNames);
+						}
+					}
+					return roleSet;
+               </Source>
+              </Script>
+            </AllowedValuesDefinition>
+          </Field>
+        </Section>
+        <Section label="Entitlements Details" name="Remove Entitlements">
+          <Field displayName="Select Entitlement(s) to Remove" dynamic="true" multi="true" name="selectedRemoveEntitlements" required="true" type="sailpoint.object.ManagedAttribute">
+            <Attributes>
+              <Map>
+                <entry key="filterString">
+                  <value>
+                    <Script>
+                      <Source>   
+						import sailpoint.object.Bundle;
+                        import sailpoint.api.ObjectUtil;
+                        import sailpoint.api.SailPointContext;
+                        import sailpoint.object.Filter;
+                        import sailpoint.object.Identity;
+                        import sailpoint.object.Profile;
+                        import sailpoint.tools.Util;
+                        import sailpoint.object.QueryOptions;
+                        import sailpoint.object.ManagedAttribute;
+                        import java.util.List;
+                        import sailpoint.object.Filter.LeafFilter;
+                        import java.util.ArrayList;
+                        
+                        String filterString = "";
+                        Filter entFilter = null;
+                        
+                        if(selectRoletoRemoveEntitlements != null &amp;&amp; selectRoletoRemoveEntitlements != void &amp;&amp; !selectRoletoRemoveEntitlements.isEmpty()){
+							ArrayList entIdList = new ArrayList();
+							field = form.getField("selectedRemoveEntitlements");
+							if(selectRoletoRemoveEntitlements != null)
+							{
+								Bundle bundleObject = context.getObject(Bundle.class,selectRoletoRemoveEntitlements);
+								List profiles = bundleObject.getProfiles();
+								for (Profile profile : profiles) {
+									List constraints = profile.getConstraints();
+									for (Filter  filter : constraints) {
+										if(filter.getValue() != null &amp;&amp; !filter.getValue().isEmpty()) {
+											Filter idFilter = Filter.eq("application.id", profile.application.id);
+											Filter dispName = Filter.in("displayName", filter.getValue());
+											Filter valueFilter = Filter.in("value", filter.getValue()); 
+											Filter orFilter = Filter.or(dispName,valueFilter);  
+											Filter finalFilter = Filter.and(idFilter,orFilter); 
+											List managedAttrObjList = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(finalFilter));
+											if(managedAttrObjList != null){
+												List idList = ObjectUtil.getObjectIds(managedAttrObjList);
+												entIdList.addAll(idList);										
+											}
+										}
+									}
+								}
+							} 
+							if(entIdList != null &amp;&amp; !entIdList.isEmpty()) {
+								entFilter = Filter.in("id",entIdList);   
+							}
+							else {
+								entFilter = Filter.eq("id",""); 
+							}    
+							filterString = entFilter.toString();                 
+							field.setFilterString(filterString);  
+                        }
+                      </Source>
+                    </Script>
+                  </value>
+                </entry>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+            <ValidationScript>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+               
+				import sailpoint.object.Bundle;
+				import sailpoint.api.ObjectUtil;
+				import sailpoint.api.SailPointContext;
+				import sailpoint.object.Filter;
+				import sailpoint.object.Identity;
+				import sailpoint.object.Profile;
+				import sailpoint.tools.Util;
+				import sailpoint.object.QueryOptions;
+				import sailpoint.object.ManagedAttribute;
+				import java.util.List;
+				import sailpoint.object.Filter.LeafFilter;
+				import java.util.ArrayList;
+				import sailpoint.object.Custom;
+
+				int minimumEntitlements = 0;
+				String filterString = "";
+				Filter entFilter = null;
+
+				if(selectRoletoRemoveEntitlements != null &amp;&amp; selectRoletoRemoveEntitlements != void &amp;&amp; 		!selectRoletoRemoveEntitlements.isEmpty()) {
+					List entIds = getManagedAttributeObjIds(selectRoletoRemoveEntitlements);
+					if(entIds != null &amp;&amp; !entIds.isEmpty()) {
+						entIds.removeAll(value);
+						Custom  customObj = getCustomObject(); // getting "NM AccessRole creation CustomObject" custom Object from context 
+						if(customObject != null){
+							minimumEntitlements = Integer.parseInt(customObj.getString("minimumEntitlements"));
+						}
+						if(entIds.size() &lt; minimumEntitlements){
+							return "Access Role must contain minimum ("+minimumEntitlements+")entitlements."; 
+						}              
+						if(entIds != null &amp;&amp; !entIds.isEmpty() &amp;&amp; entIds.size() > 0){
+							return validateEntitlements(entIds,launcher);  // Validating if Role exist with selected Entitlements
+						}
+					}
+				}
+              </Source>
+            </ValidationScript>
+          </Field>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Preview Form"/>
+    <Transition to="Entitlement Owner&apos;s Approval"/>
+  </Step>
+  <Step icon="Default" name="Adding Entitlements" posX="249" posY="424">
+    <Approval name="Adding Entitlements" owner="ref:launcher" return="selectedEntitlements,selectAction,selectRoletoAddEntitlements,launcher,selectedAppstoAddEntitlements" send="selectedEntitlements,selectAction,launcher">
+      <Form name="Adding Entitlements">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Adding Entitlements"/>
+            <entry key="title" value="Adding Entitlements"/>
+          </Map>
+        </Attributes>
+        <Description>Adding Entitlements to existing Access Roles</Description>
+        <Section label="Role Name" name="Select Role Details">
+          <Field displayName="Select Role to Add Entitlements" displayType="combobox" filterString="type==&quot;Access&quot;" name="selectRoletoAddEntitlements" required="true" type="sailpoint.object.Bundle">
+            <Attributes>
+              <Map>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+          </Field>
+        </Section>
+        <Section label="Entitlements Details" name="Select Entitlement Details">
+          <Field displayName="Select Entitlement(s) Application" multi="true" name="selectedAppstoAddEntitlements" postBack="true" required="true" type="sailpoint.object.Application">
+            <Attributes>
+              <Map>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+          </Field>
+          <Field displayName="Select Entitlement(s) to Add" dynamic="true" multi="true" name="selectedEntitlements" required="true" type="sailpoint.object.ManagedAttribute">
+            <Attributes>
+              <Map>
+                <entry key="filterString">
+                  <value>
+                    <Script>
+                      <Source>   
+						import java.util.ArrayList;
+						import java.util.Iterator;
+						import java.util.List;
+
+						import sailpoint.api.ObjectUtil;
+						import sailpoint.api.SailPointContext;
+						import sailpoint.object.Bundle;
+						import sailpoint.object.Filter;
+						import sailpoint.object.Filter.LeafFilter;
+						import sailpoint.object.ManagedAttribute;
+						import sailpoint.object.Profile;
+						import sailpoint.object.QueryOptions;
+
+						if(selectRoletoAddEntitlements != null &amp;&amp; selectRoletoAddEntitlements != void){
+							Filter entObjIdsFilter = null;
+							List entIds = new ArrayList();
+							Bundle bundleObj = context.getObject(Bundle.class, selectRoletoAddEntitlements);
+							List  profileList = bundleObj.getProfiles();
+							
+							for(Profile profileObj : profileList) {
+								List filters = profileObj.getConstraints(); 
+								Iterator profilesItrobj = filters.iterator(); 
+								while(profilesItrobj.hasNext()) { 
+									LeafFilter filterobj = (LeafFilter) profilesItrobj.next(); 
+									List entValues = (List) filterobj.getValue(); 
+									String maAattribute = filterobj.getProperty();
+									Filter attrFilter = Filter.eq("attribute", maAattribute);
+									Filter appFilter = Filter.eq("application.id", profileObj.getApplication().getId());
+									Filter andFilter = Filter.and(appFilter,attrFilter);
+									Filter valueFilter = Filter.in("value", entValues);
+									Filter finalFilter = Filter.and(valueFilter,andFilter);
+									List profileManagedAttrObjs = context.getObjects(ManagedAttribute.class, new QueryOptions().addFilter(finalFilter));
+									if(profileManagedAttrObjs != null &amp;&amp; !profileManagedAttrObjs.isEmpty()) {
+										List objectIds  = ObjectUtil.getObjectIds(profileManagedAttrObjs);
+										entIds.addAll(objectIds);
+									}
+								}
+							}
+							if(entIds != null &amp;&amp; !entIds.isEmpty()) {
+								entObjIdsFilter = Filter.in("id", entIds);
+							}
+							else {
+								entObjIdsFilter = Filter.eq("id", ""); 
+							}
+							if(null != selectedAppstoAddEntitlements &amp;&amp; void != selectedAppstoAddEntitlements) {
+								Filter idFilter = Filter.in("application.id", selectedAppstoAddEntitlements);
+								Filter finalFilter = Filter.and(idFilter, Filter.not(entObjIdsFilter));
+								String filterString = finalFilter.toString();        
+								field.setFilterString(filterString);  
+							}
+						}
+                      </Source>
+                    </Script>
+                  </value>
+                </entry>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+            <ValidationScript>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+                  import sailpoint.object.Filter;
+                  import sailpoint.object.Identity;
+                  import sailpoint.object.ManagedAttribute;
+                  import sailpoint.object.QueryOptions;
+                  import java.util.ArrayList;
+                  import sailpoint.object.Bundle;
+                  import sailpoint.api.ObjectUtil;
+                  import sailpoint.api.SailPointContext;
+
+                  import sailpoint.object.Identity;
+                  import sailpoint.object.Profile;
+                  import sailpoint.tools.Util;
+                  import java.util.List;
+                  import sailpoint.object.Filter.LeafFilter;
+                  import java.util.ArrayList;
+
+                    String errorMessage = "";
+                    errorMessage = validateEntOwner(value);
+                    if( errorMessage == null &amp;&amp; selectRoletoAddEntitlements != null &amp;&amp; selectRoletoAddEntitlements != void &amp;&amp; !selectRoletoAddEntitlements.isEmpty()){
+                     List entIds = getManagedAttributeObjIds(selectRoletoAddEntitlements);
+                      if(entIds != null &amp;&amp; !entIds.isEmpty()) {
+                      entIds.addAll(value); 
+                      if(entIds != null &amp;&amp; !entIds.isEmpty() &amp;&amp; entIds.size() > 0){
+                        return validateEntitlements(entIds,launcher); // Validating if Role exist with selected Entitlements
+                      }                               
+                    }
+                    return validateEntitlements(value,launcher);  // Validating if Role exist with selected Entitlements
+                  }
+                  return errorMessage;
+
+              </Source>
+            </ValidationScript>
+          </Field>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Preview Form"/>
+    <Transition to="Entitlement Owner&apos;s Approval"/>
+  </Step>
+  <Step icon="Default" name="Create Role Plan" posX="182" posY="42" resultVariable="plan">
+    <Script>
+      <Source>
+        import sailpoint.object.Identity;
+        import sailpoint.object.ProvisioningPlan;
+        import sailpoint.object.ProvisioningPlan.AccountRequest;
+        import sailpoint.object.ProvisioningPlan.Operation;
+
+        ProvisioningPlan plan = new ProvisioningPlan();
+        plan.setIdentity(context.getObject(Identity.class, launcher));
+        AccountRequest accountRequest = new AccountRequest();
+        accountRequest.setNativeIdentity(launcher);
+        accountRequest.setApplication("IIQ");
+        if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")) {
+			accountRequest.setOperation(ProvisioningPlan.AccountRequest.Operation.Create);
+        }else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Delete Role")) {
+			accountRequest.setOperation(ProvisioningPlan.AccountRequest.Operation.Delete);
+        }
+        plan.add(accountRequest);
+        return plan;
+      </Source>
+    </Script>
+    <Transition to="Create Identity Request"/>
+  </Step>
+  <Step icon="Task" name="Create Identity Request" posX="281" posY="14">
+    <Arg name="formTemplate"/>
+    <Arg name="enableRetryRequest" value="ref:enableRetryRequest"/>
+    <Arg name="allowRequestsWithViolations"/>
+    <Arg name="endOnManualWorkItems"/>
+    <Arg name="policiesToCheck" value="ref:policiesToCheck"/>
+    <Arg name="project"/>
+    <Arg name="workItemComments"/>
+    <Arg name="identityRequestId"/>
+    <Arg name="source" value="ref:source"/>
+    <Arg name="accessType"/>
+    <Arg name="identityDisplayName" value="ref:launcher"/>
+    <Arg name="requireViolationReviewComments"/>
+    <Arg name="identityRequest"/>
+    <Arg name="trace" value="ref:trace"/>
+    <Arg name="batchRequestItemId" value="ref:batchRequestItemId"/>
+    <Arg name="accessDate"/>
+    <Arg name="endOnProvisioningForms"/>
+    <Arg name="department"/>
+    <Arg name="plan" value="ref:plan"/>
+    <Arg name="expiredWI"/>
+    <Arg name="flow" value="ref:flow"/>
+    <Arg name="upiNumber"/>
+    <Arg name="identityName" value="ref:launcher"/>
+    <Arg name="approvalSet"/>
+    <Arg name="policyViolations"/>
+    <Arg name="violationReviewDecision"/>
+    <Arg name="policyScheme" value="ref:policyScheme"/>
+    <Arg name="priority" value="ref:workItemPriority"/>
+    <Arg name="asyncCacheRefresh"/>
+    <Arg name="optimisticProvisioning" value="ref:optimisticProvisioning"/>
+    <Arg name="launcher" value="ref:launcher"/>
+    <Description>
+      Call the standard subprocess to initialize the request, this includes
+      auditing, building the approvalset, compiling the plan into
+      project and checking policy violations.
+    </Description>
+    <Return name="project" to="project"/>
+    <Return name="approvalSet" to="approvalSet"/>
+    <Return name="policyViolations" to="policyViolations"/>
+    <Return name="identityRequestId" to="identityRequestId"/>
+    <Return name="violationReviewDecision" to="violationReviewDecision"/>
+    <Return merge="true" name="workItemComments" to="workItemComments"/>
+    <WorkflowRef>
+      <Reference class="sailpoint.object.Workflow" id="8ae5d5b66306d823016306d8d39e02ea" name="Identity Request Initialize"/>
+    </WorkflowRef>
+    <Transition to="Role Owner&apos;s Approval"/>
+  </Step>
+  <Step icon="Default" name="Role Owner&apos;s Approval" posX="454">
+    <Approval mode="serial" name="Role Owner&apos;s Approval" renderer="lcmWorkItemRenderer.xhtml">
+      <AfterScript>
+        <Source>
+          import java.util.List;
+          import sailpoint.object.WorkItem;
+          import sailpoint.object.WorkItem.State;
+          import sailpoint.object.ApprovalItem;
+          import sailpoint.object.ApprovalSet;
+          import sailpoint.workflow.WorkflowContext;
+          import sailpoint.object.Identity;
+          import sailpoint.object.Bundle;
+          import sailpoint.object.EmailTemplate;
+          import sailpoint.object.EmailOptions; 
+
+          if(item == null)
+            return null;
+          State state = null;
+          List items = item.getApprovalSet().getItems();
+          if(null != items) {
+            for (ApprovalItem approvalItem : items) {
+              state = approvalItem.getState();
+              wfcontext.setVariable("approvalState",state.toString());
+            }
+          }
+          Identity roleOwnerObj = null;
+          Identity roleOwnerManagerObj = null;
+          String emailBody = "";
+          Identity requesterObj   = context.getObjectByName(Identity.class,launcher);
+          if(selectAction != null &amp;&amp;  selectAction.equalsIgnoreCase("Create Role")) {
+            roleOwnerObj = context.getObject(Identity.class, roleOwner);
+            if (roleOwnerObj != null &amp;&amp; roleOwnerObj.getManager() != null) {
+              roleOwnerManagerObj = roleOwnerObj.getManager();
+              if((state).equals(item.getState().Rejected))
+              {
+                emailBody = "Rejected by " + roleOwnerObj.getName() + " ";
+              }
+              else
+              {
+                emailBody = "Approved by " + roleOwnerObj.getName() + " and Waiting for approval from  " + roleOwnerManagerObj.getName();
+
+              }
+            }
+          }
+          else {
+            Bundle bundleObject  = context.getObject(Bundle.class,selectedRole);      
+            roleOwnerObj = bundleObject.getOwner();
+            if (roleOwnerObj != null &amp;&amp; roleOwnerObj.getManager() != null) {
+              roleOwnerManagerObj = roleOwnerObj.getManager();
+              if((state).equals(item.getState().Rejected))
+              {
+                emailBody = "Rejected by " + roleOwnerObj.getName() + " ";
+              }
+              else
+              {
+                emailBody = "Approved by " + roleOwnerObj.getName() + " and Waiting for approval from  " + roleOwnerManagerObj.getName();
+              }
+            }
+          }
+          // Requester and RoleOwner first Notification
+          EmailTemplate template = new EmailTemplate();
+          template.setName("NM setup accessrole first notification");
+          template.setDescription("Email Template for Role owner manager regarding the decision from role owner.");
+          template.setSubject("Regarding request submission");
+          template.setBody(emailBody);
+          if( requesterObj != null &amp;&amp; roleOwnerObj!=null &amp;&amp; null != template) {
+            Map args = new HashMap();		
+            String requesterEmail = (null != requesterObj.getEmail()) ? requesterObj.getEmail() : "spadmin@gmail.com";
+            String roleOwnerEmail = roleOwnerObj.getEmail() != null ? roleOwnerObj.getEmail() : "spadmin@gmail.com";
+            String  sendTo = requesterEmail+","+roleOwnerEmail;
+            EmailOptions emailops = new EmailOptions(sendTo,args);
+            context.sendEmailNotification(template, emailops);
+          }
+        </Source>
+      </AfterScript>
+      <OwnerScript>
+        <Source>
+          import java.util.ArrayList;
+          import sailpoint.object.ApprovalItem;
+          import sailpoint.object.ApprovalSet;
+          import sailpoint.object.Bundle;
+          import sailpoint.object.Identity;
+          import sailpoint.object.Workflow.Approval;
+          import sailpoint.object.EmailTemplate;
+          import sailpoint.object.EmailOptions; 
+
+          ArrayList approvalsList = new ArrayList();
+
+          Identity roleOwnerObj = null;
+          Identity roleOwnerManagerObj = null;
+          Identity requesterObj   = context.getObjectByName(Identity.class,launcher);
+          if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")) {
+            roleOwnerObj = context.getObject(Identity.class,roleOwner);
+            approvalsList.add(getOwnerApprovalObj(roleName,roleOwner,selectAction));
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Delete Role")) {
+            Bundle bundleObj = context.getObject(Bundle.class, selectedRole);
+            if(bundleObj != null ) {
+              roleOwnerObj = bundleObj.getOwner();
+              if (roleOwnerObj != null) {
+                approvalsList.add(getOwnerApprovalObj(bundleObj.getName(),roleOwnerObj.getName(),selectAction));
+              }
+            }
+          }
+          EmailTemplate template = new EmailTemplate();
+          template.setName("NM setup accessrole initial notification");
+          template.setDescription("Email Template for Initial Notification to the role owner regarding Access Role creation");
+          template.setSubject("Regarding request submission");
+          if(roleOwnerObj != null &amp;&amp; null != template) {
+            Map args = new HashMap();		
+            String sendTo = (null != requesterObj.getEmail()) ? requesterObj.getEmail() : "spadmin@gmail.com";
+            template.setBody(" Request  received. Awaiting approval from  " + roleOwnerObj.getName());
+            EmailOptions emailops = new EmailOptions(sendTo,args);
+            context.sendEmailNotification(template, emailops);
+          }
+          return approvalsList;
+        </Source>
+      </OwnerScript>
+    </Approval>
+    <Transition to="Role Owner&apos;s Manager Approval">
+      <Script>
+        <Source>
+          if(null != approvalState &amp;&amp; void != approvalState &amp;&amp; approvalState.equals("Finished"))
+          {
+          return true;
+          }
+          return false;
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Default" name="Role Owner&apos;s Manager Approval" posX="473" posY="80">
+    <Approval mode="serial" name="Owner&apos;s Manager Approval" renderer="lcmWorkItemRenderer.xhtml">
+      <AfterScript>
+        <Source>
+          import java.util.List;
+          import sailpoint.object.WorkItem;
+          import sailpoint.object.WorkItem.State;
+          import sailpoint.object.ApprovalItem;
+          import sailpoint.object.ApprovalSet;
+          import sailpoint.workflow.WorkflowContext;
+          import sailpoint.object.Identity;
+          import sailpoint.object.Bundle;
+          import sailpoint.object.EmailTemplate;
+          import sailpoint.object.EmailOptions; 
+          import sailpoint.api.SailPointContext;
+
+          if(item == null)
+            return null;
+          State state = null;
+          List items = item.getApprovalSet().getItems();
+          if(null != items) {
+            for (ApprovalItem approvalItem : items) {
+              state = approvalItem.getState();
+              wfcontext.setVariable("approvalState",state.toString());
+              if(state.toString().equals("Rejected"))
+                wfcontext.setVariable("isRejected",true);
+            }
+          }
+          Identity roleOwnerObj = null;
+          Identity roleOwnerManagerObj = null;
+          String emailBody = "";
+          Identity requesterObj   = context.getObjectByName(Identity.class,launcher);
+          // Requester and RoleOwner second Notification 
+          if(selectAction != null &amp;&amp;  selectAction.equalsIgnoreCase("Create Role")) {
+            roleOwnerObj = context.getObject(Identity.class, roleOwner);
+            if (roleOwnerObj != null &amp;&amp; roleOwnerObj.getManager() != null) {
+              roleOwnerManagerObj = roleOwnerObj.getManager();
+              if((state).equals(item.getState().Rejected))
+              {
+                emailBody = "Rejected by " + roleOwnerManagerObj.getName();
+              }
+              else
+              {
+                emailBody = "Approved by " + roleOwnerManagerObj.getName();
+              }
+
+            }
+          }
+          else {
+            Bundle bundleObject   = context.getObject(Bundle.class,selectedRole);      
+            roleOwnerObj = bundleObject.getOwner();
+            if (roleOwnerObj != null &amp;&amp; roleOwnerObj.getManager() != null) {
+              roleOwnerManagerObj = roleOwnerObj.getManager();
+              if((state).equals(item.getState().Rejected))
+              {
+                emailBody = "Rejected by " + roleOwnerManagerObj.getName();
+              }
+              else
+              {
+                emailBody = "Approved by " + roleOwnerManagerObj.getName();
+              }
+            }
+          }
+          // Requester and RoleOwner first Notification
+          EmailTemplate template = new EmailTemplate();
+          template.setName("NM setup accessrole first notification");
+          template.setDescription("Email Template for Role owner's Approval regarding Access Role request");
+          template.setSubject("Regarding request submission");
+          template.setBody(emailBody);
+          if(roleOwnerManagerObj != null &amp;&amp; requesterObj != null &amp;&amp; roleOwnerObj!=null &amp;&amp; null != template) {
+            Map args = new HashMap();		
+            String requesterEmail = (null != requesterObj.getEmail()) ? requesterObj.getEmail() : "spadmin@gmail.com";
+            String roleOwnerManagerObj = roleOwnerManagerObj.getEmail() != null ? roleOwnerManagerObj.getEmail() : "spadmin@gmail.com";
+            String  sendTo = requesterEmail+","+roleOwnerManagerObj;
+            EmailOptions emailops = new EmailOptions(sendTo,args);
+            context.sendEmailNotification(template, emailops);
+          }
+        </Source>
+      </AfterScript>
+      <OwnerScript>
+        <Source>
+          import java.util.ArrayList;
+
+          import sailpoint.object.ApprovalItem;
+          import sailpoint.object.ApprovalSet;
+          import sailpoint.object.Bundle;
+          import sailpoint.object.Identity;
+          import sailpoint.object.Workflow.Approval;
+          import sailpoint.tools.GeneralException;
+
+          ArrayList approvalsList = new ArrayList();
+          
+             
+          if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")) {
+          Identity objRoleOwner = context.getObject(Identity.class, roleOwner);
+          approvalsList.add(getManagerApprovalObj(roleName,objRoleOwner.getName(),selectAction)); // Building Approval for Role Owner's Manager
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Delete Role")) {
+          Bundle bundleObj = context.getObject(Bundle.class, selectedRole);
+          Identity bundleOwner = bundleObj.getOwner();
+          approvalsList.add(getManagerApprovalObj(bundleObj.getName(),bundleOwner.getName(),selectAction)); // Building Approval for Role Owner's Manager
+          }
+          return approvalsList;
+        </Source>
+      </OwnerScript>
+    </Approval>
+    <Transition to="Delete Role">
+      <Script>
+        <Source>
+          if(null != approvalState &amp;&amp; void != approvalState &amp;&amp; approvalState.equals("Finished") &amp;&amp; selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Delete Role"))
+          {
+          return true;
+          }
+          return false;
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Entitlement Owner&apos;s Approval">
+      <Script>
+        <Source>
+
+          if(selectAction !=null &amp;&amp; selectAction.equalsIgnoreCase("Create Role") &amp;&amp; void != isRejected &amp;&amp; isRejected != true)
+          {
+            return true;
+          }
+            return false;
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Default" name="Entitlement Owner&apos;s Approval" posX="562" posY="284">
+    <Approval mode="parallel" name="Entitlement Owner&apos;s Approval" owner="call:buildCommonApprovals" renderer="lcmWorkItemRenderer.xhtml" send="approvalScheme,roleType,wfcontext,selectedEntitlements,roleName,roleOwner,description,selectRoletoAddEntitlements">
+      <AfterScript>
+        <Source>
+          import java.util.List;
+          
+          import sailpoint.object.WorkItem;
+          import sailpoint.object.WorkItem.State;
+          import sailpoint.object.ApprovalItem;
+          import sailpoint.object.ApprovalSet;
+          import sailpoint.object.Identity;
+          import sailpoint.object.EmailTemplate;
+          import sailpoint.object.EmailOptions; 
+          import sailpoint.api.SailPointContext;
+          import sailpoint.object.Bundle;
+          import java.util.ArrayList;
+          import sailpoint.object.Identity;
+          import sailpoint.object.ManagedAttribute;
+          import sailpoint.tools.Util;
+          import sailpoint.workflow.WorkflowContext;
+
+          if(item == null)
+            return null;
+          ArrayList final_ApprovedList = new ArrayList();
+          State state = null;
+          List items = item.getApprovalSet().getItems();
+          if(null != items) 
+          {
+            for (ApprovalItem approvalItem : items) 
+            {
+              state = approvalItem.getState();
+              if(state.toString().equals("Rejected"))
+              {
+                wfcontext.setVariable("isRejected",true);
+              }
+              else
+              {
+                if(approvedList != null)
+                {
+                  final_ApprovedList.addAll(wfcontext.getVariable("approvedList"));
+                }
+                final_ApprovedList.addAll(approvalItem.getValue());
+                wfcontext.setVariable("approvedList",final_ApprovedList);
+              }
+            }
+          }
+          ArrayList ownerList = new ArrayList();
+          List entitlementNameList = new ArrayList();
+          String strOperation = "";
+          Bundle bundleObj = null;
+          if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Add Entitlements")) 
+          {
+            entitlementNameList.addAll(selectedEntitlements);
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Remove Entitlements")) {
+            entitlementNameList.addAll(selectedRemoveEntitlements);
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")) {
+            entitlementNameList.addAll(selectedCreateEntitlements);
+          }
+          for (String  entId : entitlementNameList) {
+            ManagedAttribute entitlementObj = context.getObjectById(ManagedAttribute.class, entId);
+            Identity owner = entitlementObj.getOwner();
+            String entOwner = owner.getName();
+            ownerList.add(entOwner);
+          }
+          EmailTemplate template = new EmailTemplate();
+          template.setName("NM setup accessrole third notification");
+          template.setDescription("Email Template for Entitlements owner's regarding the request");
+
+          template.setSubject("Regarding request submission");
+          Identity identity   = context.getObject(Identity.class,launcher);
+          if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role")) {
+            bundleObj   = context.getObject(Bundle.class,roleName);
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Add Entitlements") || selectAction.equalsIgnoreCase("Remove Entitlements")) {
+            if(selectRoletoAddEntitlements != null &amp;&amp; selectRoletoAddEntitlements != void){
+              bundleObj   = context.getObject(Bundle.class,selectRoletoAddEntitlements);
+            }
+
+            if(selectRoletoRemoveEntitlements != null &amp;&amp; selectRoletoRemoveEntitlements != void){
+              bundleObj   = context.getObject(Bundle.class,selectRoletoRemoveEntitlements);
+            }
+          }
+          if(bundleObj != null){
+            Identity roleOwnerObj   = bundleObj.getOwner();
+            String entitlementsOwners = Util.listToCsv(ownerList);
+            if(roleOwnerObj!=null &amp;&amp; template != null) {
+              Identity roleOwnerManager = roleOwnerObj.getManager();
+              Map args = new HashMap();		
+              String requesterEmail = (null != identity.getEmail()) ? identity.getEmail() : "spadmin@gmail.com";
+              String roleOwnerEmail = roleOwnerObj.getEmail() != null ? roleOwnerObj.getEmail() : "spadmin@gmail.com";
+              String  sendTo = requesterEmail+","+roleOwnerEmail;
+              if(state.toString().equals("Rejected"))
+              {
+                template.setBody(" Rejected by " + entitlementsOwners);
+              }
+              else
+              {
+                template.setBody(" Approved by " + entitlementsOwners);
+              }
+
+              EmailOptions emailops = new EmailOptions(sendTo,args);
+              context.sendEmailNotification(template, emailops);
+            }
+          }
+                  
+
+           </Source>
+      </AfterScript>
+      <OwnerScript>
+        <Source>
+          import java.util.ArrayList;
+          import java.util.HashMap;
+          import java.util.Iterator;
+          import java.util.List;
+          import java.util.Map;
+          import java.util.Set;
+
+          import sailpoint.object.ApprovalItem;
+          import sailpoint.object.ApprovalSet;
+          import sailpoint.object.Bundle;
+          import sailpoint.object.Filter.LeafFilter;
+          import sailpoint.object.Filter;
+          import sailpoint.object.Identity;
+          import sailpoint.object.ManagedAttribute;
+          import sailpoint.api.ObjectUtil;
+          import sailpoint.object.Profile;
+          import sailpoint.object.ProvisioningPlan;
+          import sailpoint.object.ProvisioningPlan.AccountRequest;
+          import sailpoint.object.QueryOptions;
+          import sailpoint.object.WorkItem.State;
+          import sailpoint.object.Workflow.Approval;
+          import sailpoint.tools.GeneralException;
+          import sailpoint.workflow.WorkflowContext;
+
+        
+          List entitlementNameList = new ArrayList();
+          String strOperation = "";
+          if(selectedRole != null &amp;&amp; !selectedRole.isEmpty())
+          {
+              for(String roleName : selectedRole)
+              {
+                entitlementNameList.addAll(getEntitlementsFromAccessRoles(roleName)); // getting entitlements from Role
+              }
+          }
+         if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Add Entitlements")) 
+         {
+            entitlementNameList.addAll(selectedEntitlements);
+            strOperation = "Add";
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Remove Entitlements")) 
+          {
+                entitlementNameList.addAll(selectedRemoveEntitlements);
+                strOperation = "Delete";
+          }
+          else if(selectAction != null &amp;&amp; selectAction.equalsIgnoreCase("Create Role"))
+          {
+                entitlementNameList.addAll(selectedCreateEntitlements);
+                strOperation = "Create";
+          }
+          List entList = new ArrayList();
+          List approvalsList = new ArrayList();
+          Map approvalMap = new HashMap();
+          Filter valueFilter = Filter.in("value", entitlementNameList);
+          Filter idFilter = Filter.in("id", entitlementNameList);
+          QueryOptions options = new QueryOptions();
+          options.addFilter(Filter.or(valueFilter, idFilter));
+          List entObjs = context.getObjects(ManagedAttribute.class, options);
+          for (ManagedAttribute ma : entObjs)
+          {
+              entList.add(ma.getValue());
+              String owner = (ma.getOwner() != null) ? ma.getOwner().getName() : "spadmin";
+              List ents = new ArrayList();
+              if (approvalMap.get(owner) != null) 
+              {
+                ents = (List) approvalMap.get(owner);
+              }
+              ents.add(ma);
+              approvalMap.put(owner, ents);
+          }
+          Set entrySet = approvalMap.entrySet();
+          Iterator itr = entrySet.iterator();
+          while (itr.hasNext())
+          {
+              Map.Entry entry = (Map.Entry) itr.next();
+              Approval newApproval = new Approval();
+              newApproval.setOwner(entry.getKey().toString());
+              ApprovalSet appSet = new ApprovalSet();
+              List ents = (List) entry.getValue();
+              for (ManagedAttribute ma : ents) 
+              {
+                  ApprovalItem approvalItem = new ApprovalItem();
+                  approvalItem.setApplication(ma.getApplication().getName());
+                  approvalItem.setName(ma.getAttribute());
+                  approvalItem.setValue(ma.getDisplayableName());
+                  approvalItem.setOperation(strOperation);
+                  approvalItem.setNativeIdentity(launcher);
+                  appSet.add(approvalItem);
+              }
+              newApproval.setApprovalSet(appSet);
+              approvalsList.add(newApproval);
+          }
+          wfcontext.setVariable("entList",entList);
+          return approvalsList;
+        </Source>
+      </OwnerScript>
+    </Approval>
+    <Transition to="Update Role">
+      <Script>
+        <Source>
+          if(selectAction != null &amp;&amp; (selectAction.equalsIgnoreCase("Add Entitlements") || selectAction.equalsIgnoreCase("Remove Entitlements")))
+          {
+            if(void != isRejected  &amp;&amp; isRejected != true)
+            {
+                return true;
+            }
+          }
+                return false;
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Create Role">
+      <Script>
+        <Source>
+          if(selectAction != null &amp;&amp; (selectAction.equalsIgnoreCase("Create Role")) ){
+                return true;
+          }
+                return false;
+
+        </Source>
+      </Script>
+    </Transition>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Default" name="Create Role" posX="879" posY="210">
+    <Script>
+      <Source> 
+       createRole(roleName,roleType,roleOwner,launcher,secondaryOwner); //Creating a Role with setting the required attributes.
+      </Source>
+    </Script>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Default" name="Delete Role" posX="791" posY="144">
+    <Script>
+      <Source>
+        import sailpoint.object.Identity;
+        import sailpoint.object.Bundle;
+        import sailpoint.object.EmailTemplate;
+        import sailpoint.object.EmailOptions; 
+
+        Identity roleOwnerObj = null;
+        Identity requesterObj   = context.getObjectByName(Identity.class,launcher);
+        Bundle objBundle = context.getObject(Bundle.class, selectedRole);
+        if(objBundle != null) 
+        {
+            String emailBody = " Access role  " + objBundle.getName() +" deleted successfully.";
+            roleOwnerObj = objBundle.getOwner();
+            EmailTemplate template = new EmailTemplate();
+            template.setName("NM setup accessrole success notification");
+            template.setDescription("Email Template for Access Role Deletion Success.");
+            template.setSubject("Regarding role deletion successfull");
+            if(roleOwnerObj!=null &amp;&amp; template != null &amp;&amp; requesterObj != null)
+            {
+                Map args = new HashMap();		
+                String requesterEmail = (null != requesterObj.getEmail()) ? requesterObj.getEmail() : "spadmin@gmail.com";
+                String roleOwnerEmail = roleOwnerObj.getEmail() != null ? roleOwnerObj.getEmail() : "spadmin@gmail.com";
+                String  sendTo = requesterEmail+","+roleOwnerEmail;
+                template.setBody(emailBody);
+                EmailOptions emailops = new EmailOptions(sendTo,args);
+                context.sendEmailNotification(template, emailops);
+
+                context.removeObject(objBundle); 
+                context.commitTransaction();
+            }
+        }
+      </Source>
+    </Script>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Default" name="Update Role" posX="1060" posY="128">
+    <Script>
+      <Source>
+        import java.util.ArrayList;
+        
+        if(selectAction.equalsIgnoreCase("Remove Entitlements"))
+        {
+         updateRole(launcher,selectAction,"",selectRoletoRemoveEntitlements,selectedRemoveEntitlements); // Updating Role with attributes
+        }
+          else if(selectAction.equalsIgnoreCase("Add Entitlements"))
+        {
+        
+      updateRole(launcher,selectAction,"", selectRoletoAddEntitlements, selectedEntitlements); // Updating Role with attributes
+        }
+        
+        else if(selectAction.equalsIgnoreCase("Modify Role"))
+        {
+      	updateRole(launcher,selectAction,SelectRoleOwner,SelectedRoleToModify,new ArrayList()); // Updating Role with attributes
+        }
+        
+      </Source>
+    </Script>
+    <Transition to="Stop"/>
+  </Step>
+  <Step icon="Stop" name="Stop" posX="854" posY="20"/>
+  <Step icon="Default" name="Role Modify" posX="514" posY="389">
+    <Approval name="Role Modifications Form" owner="ref:launcher" return="SelectedRoleToModify,SelectRoleOwner,descriptionChange,SelectSecondaryRoleOwner,CurrentOwner" send="CurrentOwner,CurrentSecondaryOwner,SelectedRoleToModify,SelectRoleOwner,CurrentDescription">
+      <Form name="Role Modifications Form">
+        <Attributes>
+          <Map>
+            <entry key="pageTitle" value="Role Modifications Form"/>
+            <entry key="title" value="Role Modifications Form"/>
+          </Map>
+        </Attributes>
+        <Description>Form to do modifications for existing Roles</Description>
+        <Section label="Role Name" name="RoleModification">
+          <Field displayName="Select a Role to Modify" filterString="type==&quot;Access&quot;" name="SelectedRoleToModify" postBack="true" required="true" type="Bundle"/>
+        </Section>
+        <Section label="Owner Modification Details" name="owner Modifications">
+          <Field displayName="Existing Owner" displayType="combobox" dynamic="true" name="CurrentOwner" type="string">
+            <Attributes>
+              <Map>
+                <entry key="readOnly" value="true"/>
+              </Map>
+            </Attributes>
+            <Script>
+              <Source>
+                  import sailpoint.object.Bundle;
+                   if(SelectedRoleToModify != null &amp;&amp; SelectedRoleToModify != void){
+                    return context.getObject(Bundle.class,SelectedRoleToModify).getOwner().getName();
+                  }
+              </Source>
+            </Script>
+          </Field>
+          <Field displayName="Select Role Owner" name="SelectRoleOwner" postBack="true" type="sailpoint.object.Identity">
+            <ValidationScript>
+              <Includes>
+                <Reference class="sailpoint.object.Rule" id="ff808081631b1fa001631cf1781c005b" name="NM Access Role Management Library - Fields"/>
+              </Includes>
+              <Source>
+                 return validateManagerAndOwner(value); // Validating maximum number of roles owned by same owner and owner's manager.
+              </Source>
+            </ValidationScript>
+          </Field>
+          <Field displayName="Existing Secondary Owner" displayType="combobox" dynamic="true" name="CurrentSecondaryOwner" postBack="true" type="string">
+            <Attributes>
+              <Map>
+                <entry key="readOnly" value="true"/>
+              </Map>
+            </Attributes>
+            <Script>
+              <Source>
+              import sailpoint.object.Bundle;
+              import sailpoint.object.Identity;
+
+              if(SelectedRoleToModify != null &amp;&amp; SelectedRoleToModify != void){
+                Bundle bundle =  context.getObject(Bundle.class,SelectedRoleToModify);
+                if(bundle.getAttribute("secondaryOwner") != null)
+                {
+
+                  String secOwner = bundle.getAttribute("secondaryOwner");
+
+                  return secOwner;
+                }
+              }
+              </Source>
+            </Script>
+          </Field>
+          <Field displayName="Select Secondary Role Owner" name="SelectSecondaryRoleOwner" postBack="true" type="sailpoint.object.Identity">
+            <Attributes>
+              <Map>
+                <entry key="filterString">
+                  <value>
+                    <Script>
+                      <Source>   
+                      import sailpoint.object.Identity;
+                      import sailpoint.object.Filter;
+                        
+                        Identity identityObj = null;
+
+                        Filter mangerFilter = null;
+                      if(SelectRoleOwner != null)
+                      {
+                        identityObj = context.getObject(Identity.class,SelectRoleOwner);
+                      }
+                      else
+                      {
+                       identityObj = context.getObject(Identity.class,CurrentOwner);
+                      }                       
+                      if(identityObj != null &amp;&amp;identityObj.getManager() != null ){
+                        mangerFilter = Filter.eq("manager.id",identityObj.getManager().getId()); 
+                      }
+                      else
+                      {
+                        mangerFilter = Filter.eq("manager.id", ""); 
+                      }         
+                      String filterString =  mangerFilter.toString();
+                      field.setFilterString(filterString); 
+
+                                       
+                   </Source>
+                    </Script>
+                  </value>
+                </entry>
+                <entry key="valueProperty" value="id"/>
+              </Map>
+            </Attributes>
+          </Field>
+        </Section>
+        <Section label="Description Modification Details" name="description modification">
+          <Field displayName="Current Description" displayType="combobox" dynamic="true" name="CurrentDescription" type="string">
+            <Attributes>
+              <Map>
+                <entry key="readOnly" value="true"/>
+              </Map>
+            </Attributes>
+            <Script>
+              <Source>
+                import sailpoint.object.Bundle;
+
+                if(SelectedRoleToModify != null &amp;&amp; SelectedRoleToModify != void){
+                Bundle selectedBundle = context.getObjectById(Bundle.class, SelectedRoleToModify);
+                return selectedBundle.getDescription("en_US");
+                }
+              </Source>
+            </Script>
+          </Field>
+          <Field displayName="Description" name="descriptionChange" type="string"/>
+        </Section>
+        <Button action="next" label="Submit"/>
+        <Button action="cancel" label="Cancel"/>
+      </Form>
+    </Approval>
+    <Transition to="Preview Form"/>
+  </Step>
+  <Step catches="complete" icon="Catches" name="Finalize" posX="1058" posY="308">
+    <Arg name="trace" value="ref:trace"/>
+    <Arg name="batchRequestItemId" value="ref:batchRequestItemId"/>
+    <Arg name="autoVerifyIdentityRequest"/>
+    <Arg name="approvalSet" value="ref:approvalSet"/>
+    <Arg name="ticketManagementApplication" value="ref:ticketManagementApplication"/>
+    <Arg name="project" value="ref:project"/>
+    <Arg name="identityRequestId" value="ref:identityRequestId"/>
+    <Arg name="priority" value="ref:workItemPriority"/>
+    <Arg name="ticketDataGenerationRule"/>
+    <Description>
+      Call the standard subprocess that can audit/finalize the request.
+    </Description>
+    <WorkflowRef>
+      <Reference class="sailpoint.object.Workflow" id="8ae5d5b66306d823016306d8d42202ee" name="Identity Request Finalize"/>
+    </WorkflowRef>
+    <Transition to="Stop"/>
+  </Step>
+</Workflow>
